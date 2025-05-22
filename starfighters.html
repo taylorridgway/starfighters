@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cosmic Fury - Space Bullet Hell</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #0a0a2e, #16213e, #0f3460);
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        
+        #gameContainer {
+            position: relative;
+            border: 2px solid #00ffff;
+            border-radius: 10px;
+            box-shadow: 0 0 20px #00ffff;
+        }
+        
+        #gameCanvas {
+            background: radial-gradient(ellipse at center, #001122 0%, #000011 70%, #000000 100%);
+            display: block;
+        }
+        
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #00ffff;
+            font-size: 18px;
+            text-shadow: 0 0 10px #00ffff;
+            z-index: 10;
+        }
+        
+        #gameOver {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            color: #ff4444;
+            padding: 30px;
+            border-radius: 15px;
+            text-align: center;
+            font-size: 24px;
+            border: 2px solid #ff4444;
+            box-shadow: 0 0 20px #ff4444;
+            display: none;
+            z-index: 100;
+        }
+        
+        button {
+            background: linear-gradient(45deg, #00ffff, #0099cc);
+            color: #000;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-top: 15px;
+            transition: all 0.3s;
+        }
+        
+        button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 15px #00ffff;
+        }
+        
+        .star {
+            position: absolute;
+            background: white;
+            border-radius: 50%;
+            animation: twinkle 2s infinite alternate;
+        }
+        
+        @keyframes twinkle {
+            0% { opacity: 0.3; }
+            100% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        <div id="ui">
+            <div>Score: <span id="score">0</span></div>
+            <div>Lives: <span id="lives">3</span></div>
+            <div>Wave: <span id="wave">1</span></div>
+            <div>Bombs: <span id="bombs">0</span></div>
+            <div style="font-size: 12px; margin-top: 10px;">
+                WASD/Arrows: Move | Space: Shoot | B: Bomb | P: Pause
+            </div>
+        </div>
+        <div id="gameOver">
+            <div style="font-size: 32px; margin-bottom: 20px;">GAME OVER</div>
+            <div>Final Score: <span id="finalScore">0</span></div>
+            <div>Wave Reached: <span id="finalWave">1</span></div>
+            <button onclick="restartGame()">Play Again</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Game state
+        let gameState = {
+            score: 0,
+            lives: 3,
+            wave: 1,
+            gameRunning: true,
+            paused: false,
+            keys: {},
+            lastShot: 0,
+            waveTimer: 0,
+            enemySpawnTimer: 0
+        };
+        
+        // Player object
+        const player = {
+            x: canvas.width / 2,
+            y: canvas.height - 60,
+            width: 30,
+            height: 40,
+            speed: 5,
+            invulnerable: 0,
+            shootCooldown: 150,
+            bombs: 0
+        };
+        
+        // Game arrays
+        let bullets = [];
+        let enemies = [];
+        let enemyBullets = [];
+        let powerUps = [];
+        let particles = [];
+        let stars = [];
+        
+        // Initialize stars
+        for (let i = 0; i < 100; i++) {
+            stars.push({
+                x: Math.random() * canvas.width,
+                y: Math.random() * canvas.height,
+                size: Math.random() * 2 + 1,
+                speed: Math.random() * 0.5 + 0.2
+            });
+        }
+        
+        // Input handling
+        document.addEventListener('keydown', (e) => {
+            gameState.keys[e.code] = true;
+            if (e.code === 'KeyP') togglePause();
+            if (e.code === 'KeyB') useBomb();
+            if (e.code === 'Space') e.preventDefault();
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            gameState.keys[e.code] = false;
+        });
+        
+        function togglePause() {
+            gameState.paused = !gameState.paused;
+        }
+        
+        function useBomb() {
+            if (player.bombs > 0 && !gameState.paused && gameState.gameRunning) {
+                player.bombs--;
+                
+                // Clear all enemies and enemy bullets
+                enemies.forEach(enemy => {
+                    // Award points for destroyed enemies
+                    gameState.score += enemy.type === 'basic' ? 50 : enemy.type === 'spiral' ? 150 : 100;
+                    
+                    // Create explosion particles for each enemy
+                    for (let i = 0; i < 15; i++) {
+                        particles.push({
+                            x: enemy.x,
+                            y: enemy.y,
+                            vx: (Math.random() - 0.5) * 8,
+                            vy: (Math.random() - 0.5) * 8,
+                            life: 40,
+                            color: `hsl(${Math.random() * 60 + 40}, 100%, 70%)`
+                        });
+                    }
+                });
+                
+                // Clear arrays
+                enemies = [];
+                enemyBullets = [];
+                
+                // Create screen-wide explosion effect
+                for (let i = 0; i < 50; i++) {
+                    particles.push({
+                        x: Math.random() * canvas.width,
+                        y: Math.random() * canvas.height,
+                        vx: (Math.random() - 0.5) * 10,
+                        vy: (Math.random() - 0.5) * 10,
+                        life: 60,
+                        color: `hsl(${Math.random() * 60 + 20}, 100%, 60%)`
+                    });
+                }
+            }
+        }
+        
+        // Player functions
+        function updatePlayer() {
+            if (gameState.paused) return;
+            
+            // Movement
+            if (gameState.keys['KeyA'] || gameState.keys['ArrowLeft']) {
+                player.x = Math.max(15, player.x - player.speed);
+            }
+            if (gameState.keys['KeyD'] || gameState.keys['ArrowRight']) {
+                player.x = Math.min(canvas.width - 15, player.x + player.speed);
+            }
+            if (gameState.keys['KeyW'] || gameState.keys['ArrowUp']) {
+                player.y = Math.max(15, player.y - player.speed);
+            }
+            if (gameState.keys['KeyS'] || gameState.keys['ArrowDown']) {
+                player.y = Math.min(canvas.height - 15, player.y + player.speed);
+            }
+            
+            // Shooting
+            if (gameState.keys['Space'] && Date.now() - gameState.lastShot > player.shootCooldown) {
+                bullets.push({
+                    x: player.x,
+                    y: player.y - 20,
+                    speed: 8,
+                    damage: 1
+                });
+                gameState.lastShot = Date.now();
+            }
+            
+            if (player.invulnerable > 0) player.invulnerable--;
+        }
+        
+        function drawPlayer() {
+            ctx.save();
+            
+            if (player.invulnerable > 0 && Math.floor(player.invulnerable / 5) % 2) {
+                ctx.globalAlpha = 0.5;
+            }
+            
+            // Ship body
+            ctx.fillStyle = '#00ffff';
+            ctx.beginPath();
+            ctx.moveTo(player.x, player.y - 20);
+            ctx.lineTo(player.x - 15, player.y + 20);
+            ctx.lineTo(player.x, player.y + 10);
+            ctx.lineTo(player.x + 15, player.y + 20);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Engine glow
+            ctx.fillStyle = '#ff4400';
+            ctx.beginPath();
+            ctx.moveTo(player.x - 8, player.y + 20);
+            ctx.lineTo(player.x, player.y + 30);
+            ctx.lineTo(player.x + 8, player.y + 20);
+            ctx.closePath();
+            ctx.fill();
+            
+            ctx.restore();
+        }
+        
+        // Bullet functions
+        function updateBullets() {
+            if (gameState.paused) return;
+            
+            bullets = bullets.filter(bullet => {
+                bullet.y -= bullet.speed;
+                return bullet.y > -10;
+            });
+            
+            enemyBullets = enemyBullets.filter(bullet => {
+                bullet.x += bullet.vx;
+                bullet.y += bullet.vy;
+                return bullet.y < canvas.height + 10 && bullet.x > -10 && bullet.x < canvas.width + 10;
+            });
+        }
+        
+        function drawBullets() {
+            // Player bullets
+            ctx.fillStyle = '#00ff00';
+            bullets.forEach(bullet => {
+                ctx.beginPath();
+                ctx.arc(bullet.x, bullet.y, 3, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Bullet trail
+                ctx.fillStyle = 'rgba(0, 255, 0, 0.3)';
+                ctx.fillRect(bullet.x - 1, bullet.y + 3, 2, 8);
+                ctx.fillStyle = '#00ff00';
+            });
+            
+            // Enemy bullets
+            ctx.fillStyle = '#ff4444';
+            enemyBullets.forEach(bullet => {
+                ctx.beginPath();
+                ctx.arc(bullet.x, bullet.y, 4, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+        
+        // Enemy functions
+        function spawnEnemy() {
+            const types = ['basic', 'spiral', 'burst'];
+            const type = types[Math.floor(Math.random() * types.length)];
+            
+            const enemy = {
+                x: Math.random() * (canvas.width - 60) + 30,
+                y: -30,
+                width: 40,
+                height: 30,
+                hp: type === 'basic' ? 1 : type === 'spiral' ? 3 : 2,
+                maxHp: type === 'basic' ? 1 : type === 'spiral' ? 3 : 2,
+                speed: Math.random() * 2 + 1,
+                type: type,
+                shootTimer: 0,
+                shootCooldown: type === 'basic' ? 120 : type === 'spiral' ? 80 : 60,
+                angle: 0
+            };
+            
+            enemies.push(enemy);
+        }
+        
+        function updateEnemies() {
+            if (gameState.paused) return;
+            
+            enemies = enemies.filter(enemy => {
+                enemy.y += enemy.speed;
+                enemy.shootTimer++;
+                enemy.angle += 0.05;
+                
+                // Different shooting patterns
+                if (enemy.shootTimer >= enemy.shootCooldown) {
+                    enemy.shootTimer = 0;
+                    
+                    if (enemy.type === 'basic') {
+                        enemyBullets.push({
+                            x: enemy.x,
+                            y: enemy.y + 20,
+                            vx: 0,
+                            vy: 3
+                        });
+                    } else if (enemy.type === 'spiral') {
+                        for (let i = 0; i < 6; i++) {
+                            const angle = (enemy.angle + i * Math.PI / 3);
+                            enemyBullets.push({
+                                x: enemy.x,
+                                y: enemy.y + 20,
+                                vx: Math.cos(angle) * 2,
+                                vy: Math.sin(angle) * 2 + 1
+                            });
+                        }
+                    } else if (enemy.type === 'burst') {
+                        const dx = player.x - enemy.x;
+                        const dy = player.y - enemy.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        const speed = 4;
+                        
+                        for (let i = -1; i <= 1; i++) {
+                            const angle = Math.atan2(dy, dx) + i * 0.3;
+                            enemyBullets.push({
+                                x: enemy.x,
+                                y: enemy.y + 20,
+                                vx: Math.cos(angle) * speed,
+                                vy: Math.sin(angle) * speed
+                            });
+                        }
+                    }
+                }
+                
+                return enemy.y < canvas.height + 50 && enemy.hp > 0;
+            });
+            
+            // Spawn new enemies
+            if (gameState.enemySpawnTimer <= 0) {
+                spawnEnemy();
+                gameState.enemySpawnTimer = Math.max(30, 120 - gameState.wave * 5);
+            } else {
+                gameState.enemySpawnTimer--;
+            }
+        }
+        
+        function drawEnemies() {
+            enemies.forEach(enemy => {
+                ctx.save();
+                
+                // Health bar
+                const healthPercent = enemy.hp / enemy.maxHp;
+                ctx.fillStyle = healthPercent > 0.5 ? '#00ff00' : healthPercent > 0.25 ? '#ffff00' : '#ff4444';
+                ctx.fillRect(enemy.x - 20, enemy.y - 40, 40 * healthPercent, 4);
+                ctx.strokeStyle = '#ffffff';
+                ctx.strokeRect(enemy.x - 20, enemy.y - 40, 40, 4);
+                
+                // Enemy ship
+                if (enemy.type === 'basic') {
+                    ctx.fillStyle = '#ff6666';
+                } else if (enemy.type === 'spiral') {
+                    ctx.fillStyle = '#9966ff';
+                } else {
+                    ctx.fillStyle = '#ffff66';
+                }
+                
+                ctx.beginPath();
+                ctx.moveTo(enemy.x, enemy.y + 15);
+                ctx.lineTo(enemy.x - 20, enemy.y - 15);
+                ctx.lineTo(enemy.x, enemy.y - 5);
+                ctx.lineTo(enemy.x + 20, enemy.y - 15);
+                ctx.closePath();
+                ctx.fill();
+                
+                ctx.restore();
+            });
+        }
+        
+        // Collision detection
+        function checkCollisions() {
+            if (gameState.paused) return;
+            
+            // Player bullets vs enemies
+            bullets.forEach((bullet, bulletIndex) => {
+                enemies.forEach((enemy, enemyIndex) => {
+                    if (bullet.x > enemy.x - 20 && bullet.x < enemy.x + 20 &&
+                        bullet.y > enemy.y - 15 && bullet.y < enemy.y + 15) {
+                        
+                        bullets.splice(bulletIndex, 1);
+                        enemy.hp -= bullet.damage;
+                        
+                        if (enemy.hp <= 0) {
+                            // Create explosion particles
+                            for (let i = 0; i < 10; i++) {
+                                particles.push({
+                                    x: enemy.x,
+                                    y: enemy.y,
+                                    vx: (Math.random() - 0.5) * 6,
+                                    vy: (Math.random() - 0.5) * 6,
+                                    life: 30,
+                                    color: `hsl(${Math.random() * 60 + 10}, 100%, 50%)`
+                                });
+                            }
+                            
+                            gameState.score += enemy.type === 'basic' ? 100 : enemy.type === 'spiral' ? 300 : 200;
+                            enemies.splice(enemyIndex, 1);
+                            
+                            // Chance to drop power-up
+                            const dropChance = Math.random();
+                            if (dropChance < 0.05) {
+                                powerUps.push({
+                                    x: enemy.x,
+                                    y: enemy.y,
+                                    type: 'extraLife',
+                                    vy: 2
+                                });
+                            } else if (dropChance < 0.15) {
+                                powerUps.push({
+                                    x: enemy.x,
+                                    y: enemy.y,
+                                    type: 'bomb',
+                                    vy: 2
+                                });
+                            }
+                        }
+                    }
+                });
+            });
+            
+            // Enemy bullets vs player
+            if (player.invulnerable <= 0) {
+                enemyBullets.forEach((bullet, bulletIndex) => {
+                    if (bullet.x > player.x - 15 && bullet.x < player.x + 15 &&
+                        bullet.y > player.y - 20 && bullet.y < player.y + 20) {
+                        
+                        enemyBullets.splice(bulletIndex, 1);
+                        gameState.lives--;
+                        player.invulnerable = 120;
+                        
+                        if (gameState.lives <= 0) {
+                            gameOver();
+                        }
+                    }
+                });
+            }
+            
+            // Player vs power-ups
+            powerUps.forEach((powerUp, powerUpIndex) => {
+                if (powerUp.x > player.x - 20 && powerUp.x < player.x + 20 &&
+                    powerUp.y > player.y - 20 && powerUp.y < player.y + 20) {
+                    
+                    if (powerUp.type === 'bomb') {
+                        player.bombs++;
+                    } else if (powerUp.type === 'extraLife') {
+                        gameState.lives++;
+                    }
+                    
+                    powerUps.splice(powerUpIndex, 1);
+                    gameState.score += 50;
+                }
+            });
+        }
+        
+        // Power-ups and particles
+        function updatePowerUps() {
+            if (gameState.paused) return;
+            
+            powerUps = powerUps.filter(powerUp => {
+                powerUp.y += powerUp.vy;
+                return powerUp.y < canvas.height + 20;
+            });
+        }
+        
+        function drawPowerUps() {
+            powerUps.forEach(powerUp => {
+                if (powerUp.type === 'bomb') {
+                    ctx.fillStyle = '#ffff00';
+                    ctx.strokeStyle = '#ff8800';
+                    ctx.lineWidth = 2;
+                    
+                    ctx.beginPath();
+                    ctx.arc(powerUp.x, powerUp.y, 8, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                    
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = '12px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('B', powerUp.x, powerUp.y + 4);
+                } else if (powerUp.type === 'extraLife') {
+                    ctx.fillStyle = '#00ff88';
+                    ctx.strokeStyle = '#00dd66';
+                    ctx.lineWidth = 2;
+                    
+                    ctx.beginPath();
+                    ctx.arc(powerUp.x, powerUp.y, 8, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                    
+                    // Draw heart symbol
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = '12px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('♥', powerUp.x, powerUp.y + 4);
+                }
+            });
+        }
+        
+        function updateParticles() {
+            if (gameState.paused) return;
+            
+            particles = particles.filter(particle => {
+                particle.x += particle.vx;
+                particle.y += particle.vy;
+                particle.life--;
+                return particle.life > 0;
+            });
+        }
+        
+        function drawParticles() {
+            particles.forEach(particle => {
+                ctx.fillStyle = particle.color;
+                ctx.globalAlpha = particle.life / 30;
+                ctx.beginPath();
+                ctx.arc(particle.x, particle.y, 2, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+            });
+        }
+        
+        // Background
+        function drawBackground() {
+            // Move stars
+            stars.forEach(star => {
+                star.y += star.speed;
+                if (star.y > canvas.height) {
+                    star.y = -5;
+                    star.x = Math.random() * canvas.width;
+                }
+            });
+            
+            // Draw stars
+            ctx.fillStyle = '#ffffff';
+            stars.forEach(star => {
+                ctx.globalAlpha = Math.random() * 0.5 + 0.5;
+                ctx.beginPath();
+                ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.globalAlpha = 1;
+        }
+        
+        // Wave management
+        function updateWave() {
+            if (gameState.paused) return;
+            
+            gameState.waveTimer++;
+            if (gameState.waveTimer >= 1800) { // 30 seconds per wave
+                gameState.wave++;
+                gameState.waveTimer = 0;
+                gameState.score += gameState.wave * 500;
+            }
+        }
+        
+        // UI updates
+        function updateUI() {
+            document.getElementById('score').textContent = gameState.score;
+            document.getElementById('lives').textContent = gameState.lives;
+            document.getElementById('wave').textContent = gameState.wave;
+            document.getElementById('bombs').textContent = player.bombs;
+        }
+        
+        // Game over
+        function gameOver() {
+            gameState.gameRunning = false;
+            document.getElementById('finalScore').textContent = gameState.score;
+            document.getElementById('finalWave').textContent = gameState.wave;
+            document.getElementById('gameOver').style.display = 'block';
+        }
+        
+        function restartGame() {
+            gameState = {
+                score: 0,
+                lives: 3,
+                wave: 1,
+                gameRunning: true,
+                paused: false,
+                keys: {},
+                lastShot: 0,
+                waveTimer: 0,
+                enemySpawnTimer: 0
+            };
+            
+            player.x = canvas.width / 2;
+            player.y = canvas.height - 60;
+            player.invulnerable = 0;
+            player.shootCooldown = 150;
+            player.bombs = 0;
+            
+            bullets = [];
+            enemies = [];
+            enemyBullets = [];
+            powerUps = [];
+            particles = [];
+            
+            document.getElementById('gameOver').style.display = 'none';
+        }
+        
+        // Main game loop
+        function gameLoop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            drawBackground();
+            
+            if (gameState.gameRunning) {
+                updatePlayer();
+                updateBullets();
+                updateEnemies();
+                updatePowerUps();
+                updateParticles();
+                updateWave();
+                checkCollisions();
+                
+                drawPlayer();
+                drawBullets();
+                drawEnemies();
+                drawPowerUps();
+                drawParticles();
+                
+                updateUI();
+            }
+            
+            if (gameState.paused && gameState.gameRunning) {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                ctx.fillStyle = '#00ffff';
+                ctx.font = '48px Courier New';
+                ctx.textAlign = 'center';
+                ctx.fillText('PAUSED', canvas.width / 2, canvas.height / 2);
+                
+                ctx.font = '24px Courier New';
+                ctx.fillText('Press P to resume', canvas.width / 2, canvas.height / 2 + 50);
+            }
+            
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // Start the game
+        gameLoop();
+    </script>
+</body>
+</html>
